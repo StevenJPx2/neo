@@ -1,0 +1,23 @@
+{
+  "name": "neo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A lightweight remote iPhone Safari WebDriver harness with an agent-facing API.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "smoke": "tsx scripts/smoke.ts",
+    "format": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "prettier": "^3.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,33 @@
+node_modules/
+dist/
+.DS_Store
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+
+# Generated caches, logs, coverage, and local runtime output
+.cache/
+.turbo/
+.vite/
+coverage/
+*.log
+*.pid
+
+# Large/generated model or media data
+models/
+weights/
+*.gguf
+*.safetensors
+*.onnx
+*.bin
+
+# Private local/device data
+private/
+secrets/
+screenshots/
