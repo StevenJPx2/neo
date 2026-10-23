@@ -1,0 +1,16 @@
+{
+  "body": [
+    "A small **TypeScript** harness for **Safari on a real iPhone**, over USB or Wi-Fi, or on an iOS Simulator. Agents get an API to navigate, click, type, take screenshots, read the DOM and manage tabs.",
+    "It talks to Apple's **W3C WebDriver** server, `safaridriver`, directly, so there is **no Appium and no native app**.",
+    "Safari automation is isolated from ordinary browsing data and allows **one session at a time**, and neo keeps both constraints."
+  ],
+  "areas": [
+    "developer-tools",
+    "mobile-applications"
+  ],
+  "technologies": {
+    "add": [
+      "webdriver"
+    ]
+  }
+}
