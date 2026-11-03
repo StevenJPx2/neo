@@ -6,7 +6,7 @@ import {
   type ActionDeps,
   type ActionOutcome,
 } from "./final.js";
-import { runStep, type Chain, type Anywhere } from "./flow.js";
+import type { Anywhere, Chain } from "./flow.js";
 import { isVpa } from "./formats.js";
 import {
   enterAmount,
@@ -25,7 +25,7 @@ import {
   showRapidoHome,
   VEHICLES,
 } from "./steps/rapido.js";
-import { APP_NAMES, APPS, openApp } from "./steps/system.js";
+import { APPS, openApp } from "./steps/system.js";
 import {
   openChat,
   openChatByNumber,
@@ -214,15 +214,3 @@ export const OpenAppInput = z.object({
   app: z.enum(APPS).describe("App to open, past its Face ID lock"),
 });
 export type OpenAppInput = z.infer<typeof OpenAppInput>;
-
-/** Base setup, then Spotlight, then the app's Face ID lock (Face ID, then the Keychain passcode once). */
-export async function openAppAction(
-  deps: ActionDeps,
-  input: OpenAppInput,
-): Promise<ActionOutcome> {
-  await runStep(deps, openApp(input.app));
-  return {
-    status: "completed",
-    summary: `${APP_NAMES[input.app]} is open and unlocked`,
-  };
-}

@@ -1,4 +1,6 @@
 import type { z } from "zod";
+import type { ChainBook } from "./chains.js";
+import type { PhoneConfig } from "./config.js";
 import {
   finish,
   type ActionDeps,
@@ -7,14 +9,43 @@ import {
 } from "./final.js";
 import { runStep, type Step } from "./flow.js";
 
+/** The work a tool does on a leased phone. */
+export type Work = (deps: ActionDeps) => Promise<ActionOutcome>;
+
+/** What a tool may read before the phone is leased. */
+export type Setup = {
+  config: PhoneConfig;
+  loadChains: () => Promise<ChainBook>;
+};
+
+/** A step tool built from its input, ready to pair in a chain. */
+export type Link =
+  | {
+      kind: "step";
+      tool: string;
+      step: Step<string, string>;
+      refusal: string | undefined;
+    }
+  | {
+      kind: "final";
+      tool: string;
+      final: FinalStep<string, string>;
+      refusal: string | undefined;
+    };
+
 /** One action or step, exposed identically as an MCP tool and a CLI command. */
 export type PhoneTool = {
   name: string;
   title: string;
   description: string;
   shape: z.ZodRawShape;
-  /** Validates input before the phone is touched; returns the work to run on a leased phone. */
-  prepare(input: unknown): (deps: ActionDeps) => Promise<ActionOutcome>;
+  /**
+   * Validates input before the phone is touched. Returns the work to run on a leased
+   * phone, or an outcome that needs no phone (a refusal, a listing).
+   */
+  prepare(input: unknown, setup: Setup): Promise<Work | ActionOutcome>;
+  /** Steps only: builds the step from its input, for chains. */
+  link?: (input: unknown, config: PhoneConfig) => Link;
 };
 
 type Definition<S extends z.ZodObject> = {
@@ -34,7 +65,7 @@ export function defineTool<S extends z.ZodObject>(
     title: definition.title,
     description: definition.description,
     shape: definition.input.shape,
-    prepare(input) {
+    prepare: async (input) => {
       const parsed = definition.input.parse(input);
       return (deps) => definition.run(deps, parsed);
     },
@@ -50,57 +81,91 @@ type Ends = {
 const ends = ({ from, to }: Ends) =>
   ` Starts on ${from}; refuses to run elsewhere. Ends on ${to}.`;
 
+/** A reason to refuse before the phone is touched, e.g. an amount over the limit. */
+type Refuse<S extends z.ZodObject> = (
+  input: z.output<S>,
+  config: PhoneConfig,
+) => string | undefined;
+
 /** A single reversible step as a tool. */
 export function defineStep<S extends z.ZodObject>(
   definition: Definition<S> &
     Ends & {
-      step: (input: z.output<S>, deps: ActionDeps) => Step<string, string>;
-      /** A reason to refuse before the phone is touched. */
-      refuse?: (input: z.output<S>, deps: ActionDeps) => string | undefined;
+      step: (input: z.output<S>, config: PhoneConfig) => Step<string, string>;
+      refuse?: Refuse<S>;
     },
 ): PhoneTool {
-  return defineTool({
-    ...definition,
+  const link = (input: unknown, config: PhoneConfig) => {
+    const parsed = definition.input.parse(input);
+    return {
+      kind: "step" as const,
+      tool: definition.name,
+      step: definition.step(parsed, config),
+      refusal: definition.refuse?.(parsed, config),
+    };
+  };
+  return {
+    name: definition.name,
+    title: definition.title,
     description: definition.description + ends(definition),
-    run: async (deps, input) => {
-      const refusal = definition.refuse?.(input, deps);
+    shape: definition.input.shape,
+    link,
+    prepare: async (input, { config }) => {
+      const { step, refusal } = link(input, config);
       if (refusal !== undefined)
         return {
           status: "blocked",
           summary: definition.title,
           reason: refusal,
         };
-      const step = definition.step(input, deps);
-      await runStep(deps, step);
-      return {
-        status: "completed",
-        summary: `${definition.title}. Now on ${step.to.name}.`,
+      return async (deps) => {
+        await runStep(deps, step);
+        return {
+          status: "completed",
+          summary: `${definition.title}. Now on ${step.to.name}.`,
+        };
       };
     },
-  });
+  };
 }
 
-/** An irreversible step as a tool: `input.complete` and the Mac approval gate it. */
+/** An irreversible step as a tool: `complete` and the Mac approval gate it. */
 export function defineFinal<S extends z.ZodObject>(
   definition: Definition<S> &
     Ends & {
       final: (
         input: z.output<S>,
-        deps: ActionDeps,
+        config: PhoneConfig,
       ) => FinalStep<string, string>;
       complete: (input: z.output<S>) => boolean;
-      refuse?: (input: z.output<S>, deps: ActionDeps) => string | undefined;
+      refuse?: Refuse<S>;
     },
 ): PhoneTool {
-  return defineTool({
-    ...definition,
+  const build = (input: unknown, config: PhoneConfig) => {
+    const parsed = definition.input.parse(input);
+    const link = {
+      kind: "final" as const,
+      tool: definition.name,
+      final: definition.final(parsed, config),
+      refusal: definition.refuse?.(parsed, config),
+    };
+    return { parsed, link };
+  };
+  return {
+    name: definition.name,
+    title: definition.title,
     description: definition.description + ends(definition),
-    run: async (deps, input) => {
-      const final = definition.final(input, deps);
-      const refusal = definition.refuse?.(input, deps);
-      if (refusal !== undefined)
-        return { status: "blocked", summary: final.summary, reason: refusal };
-      return finish(deps, final, definition.complete(input));
+    shape: definition.input.shape,
+    link: (input, config) => build(input, config).link,
+    prepare: async (input, { config }) => {
+      const { parsed, link } = build(input, config);
+      if (link.refusal !== undefined)
+        return {
+          status: "blocked",
+          summary: link.final.summary,
+          reason: link.refusal,
+        };
+      return (deps) => finish(deps, link.final, definition.complete(parsed));
     },
-  });
+  };
 }

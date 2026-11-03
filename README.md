@@ -86,7 +86,11 @@ dialog on the Mac.
 ```sh
 npm run phone -- send_money '{"vpa":"shop@okhdfcbank","payeeName":"Ravi","amountInr":250}'
 npm run phone -- phone_screen
+npm run phone -- chain note-to-self '{"text":"Buy milk"}'
 ```
+
+Sequences you run often can be saved as chains of steps with variables in
+`~/.config/neo/chains.json`; see [src/phone/README.md](src/phone/README.md#saved-chains-chainsts).
 
 The included `opencode.json` registers the actions and steps as the local
 `neo-phone` MCP server. Setup, safety rules and the config file are in

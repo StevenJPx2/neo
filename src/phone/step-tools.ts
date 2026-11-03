@@ -275,7 +275,7 @@ const cred: PhoneTool[] = [
     input: UpiPaymentInput,
     from: "cred.amount",
     to: "cred.amount_entered",
-    refuse: (input, deps) => overLimit(deps.config, input.amountInr),
+    refuse: (input, config) => overLimit(config, input.amountInr),
     step: (input) => enterAmount(input),
   }),
   defineFinal({
@@ -288,7 +288,7 @@ const cred: PhoneTool[] = [
     from: "cred.amount_entered",
     to: "cred.pin",
     complete: (input) => input.complete,
-    refuse: (input, deps) => overLimit(deps.config, input.amountInr),
+    refuse: (input, config) => overLimit(config, input.amountInr),
     final: (input) => sendMoney(input),
   }),
 ];

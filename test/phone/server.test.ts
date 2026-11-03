@@ -64,6 +64,8 @@ describe("neo-phone MCP server", { timeout: 30_000 }, () => {
       "rapido_search_drop",
       "rapido_pick_vehicle",
       "rapido_book",
+      "run_chain",
+      "list_chains",
     ]);
     const gated = tools.filter(
       (tool) => tool.inputSchema.properties?.["complete"] !== undefined,
@@ -76,6 +78,7 @@ describe("neo-phone MCP server", { timeout: 30_000 }, () => {
       "whatsapp_send",
       "cred_send_money",
       "rapido_book",
+      "run_chain",
     ]);
     for (const tool of gated) {
       expect(tool.inputSchema.properties?.["complete"]).toMatchObject({

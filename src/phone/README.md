@@ -59,6 +59,54 @@ flowchart LR
   (a draft needs a chat, not the chat list), and neither does skipping
   `unlock_app` after a launch. See [`steps/README.md`](steps/README.md).
 
+## Saved chains (`chains.ts`)
+
+A chain is a named list of steps with variables, saved in
+`~/.config/neo/chains.json` (or `NEO_PHONE_CHAINS`). It runs in one call instead
+of one call per step. The file is installed from the `configs/neo` package of
+the dotfiles repo with `just update neo`. That repo is public, so keep chat
+names, numbers and UPI IDs as variables rather than saved values.
+
+```json
+{
+  "chains": {
+    "note-to-self": {
+      "description": "Type a note into your own WhatsApp chat",
+      "vars": { "chat": "Saved Messages", "text": null },
+      "steps": [
+        { "tool": "open_app", "input": { "app": "whatsapp" } },
+        "whatsapp_chat_list",
+        "whatsapp_open_search",
+        { "tool": "whatsapp_open_chat", "input": { "name": "${chat}" } },
+        { "tool": "whatsapp_type_draft", "input": { "text": "${text}" } }
+      ]
+    }
+  }
+}
+```
+
+```sh
+npm run phone -- list_chains
+npm run phone -- chain note-to-self '{"text":"Buy milk"}'
+npm run phone -- run_chain '{"name":"whatsapp-to-chat","vars":{"chat":"Family","text":"Home by 8"},"complete":true}'
+```
+
+- **Steps** are step tools (as listed by `npm run phone`) by name, or
+  `{ "tool", "input" }`. Actions are not steps; `open_app` is.
+- **Variables:** `vars` gives saved values; `null` means the run must supply one.
+  `${name}` is replaced inside strings, and a string that is only `${name}` takes
+  the value's type, so `"amountInr": "${amount}"` stays a number. Unknown or
+  missing variables are refused.
+- **Checked before the phone is leased:** every step's input against that step's
+  own schema, every pair of steps (each must start where the one before ends,
+  as `chain().then()` checks at compile time), the payment limit, and that an
+  irreversible step comes only last. A refused chain touches nothing.
+- **`complete` is never saved** in the file. It is given to `run_chain` when the
+  chain runs (default `false`), and finishing still needs Approve on the Mac.
+  `chain <name>` on the CLI always stages.
+- On the device each step still checks its start and end screen, exactly as when
+  run one by one.
+
 ## Safety model
 
 ```mermaid
@@ -105,22 +153,23 @@ flowchart LR
 
 ## Modules
 
-| Module                                 | Responsibility                                                                              |
-| -------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `ghosthand.ts`                         | HTTP client for the daemon's unix socket (`~/.ghosthand/daemon.sock`); typed problems       |
-| `phone.ts`                             | `withPhone`: lease, act, always release; `Phone` (read, tap, key, type, scroll, pause)      |
-| `navigation.ts`                        | Line pickers and bounded polling over OCR text                                              |
-| `flow.ts`                              | `Screen`, `Step`, `chain` (typed pairing), `runStep` (start and end screen checks)          |
-| `final.ts`                             | `FinalStep` and `finish`: checks, approval, re-check, final tap, confirmation               |
-| `steps/`                               | The hardcoded steps per app: system, WhatsApp, CRED, Rapido                                 |
-| `unlock.ts`                            | Face ID app locks: Face ID, then the Keychain passcode typed once into the confirmed prompt |
-| `verify.ts`                            | Screen checks: OCR expectations in code plus the Jev (TypeSafe) judge                       |
-| `approval.ts`                          | The macOS approval dialog                                                                   |
-| `formats.ts`                           | Phone numbers, UPI IDs, amounts                                                             |
-| `config.ts`                            | `~/.config/neo/phone.json`: contacts, water vendor, payment limit                           |
-| `actions.ts`                           | The actions: fixed chains of steps                                                          |
-| `tool.ts`, `tools.ts`, `step-tools.ts` | Tool definitions and the registry shared by the MCP server and the CLI                      |
-| `server.ts`, `cli.ts`                  | Entry points                                                                                |
+| Module                                 | Responsibility                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `ghosthand.ts`                         | HTTP client for the daemon's unix socket (`~/.ghosthand/daemon.sock`); typed problems        |
+| `phone.ts`                             | `withPhone`: lease, act, always release; `Phone` (read, tap, key, type, scroll, pause)       |
+| `navigation.ts`                        | Line pickers and bounded polling over OCR text                                               |
+| `flow.ts`                              | `Screen`, `Step`, `chain` (typed pairing), `runStep` (start and end screen checks)           |
+| `final.ts`                             | `FinalStep` and `finish`: checks, approval, re-check, final tap, confirmation                |
+| `steps/`                               | The hardcoded steps per app: system, WhatsApp, CRED, Rapido                                  |
+| `unlock.ts`                            | Face ID app locks: Face ID, then the Keychain passcode typed once into the confirmed prompt  |
+| `verify.ts`                            | Screen checks: OCR expectations in code plus the Jev (TypeSafe) judge                        |
+| `approval.ts`                          | The macOS approval dialog                                                                    |
+| `formats.ts`                           | Phone numbers, UPI IDs, amounts                                                              |
+| `config.ts`                            | `~/.config/neo/phone.json`: contacts, water vendor, payment limit                            |
+| `actions.ts`                           | The actions: fixed chains of steps                                                           |
+| `chains.ts`                            | Saved chains: load `chains.json`, fill in variables, check pairs; `run_chain`, `list_chains` |
+| `tool.ts`, `tools.ts`, `step-tools.ts` | Tool definitions and the registry shared by the MCP server and the CLI                       |
+| `server.ts`, `cli.ts`                  | Entry points                                                                                 |
 
 ## Setup
 

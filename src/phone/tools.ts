@@ -2,7 +2,6 @@ import {
   bookRapido,
   BookRapidoInput,
   OpenAppInput,
-  openAppAction,
   orderWater,
   OrderWaterInput,
   sendMoney,
@@ -11,13 +10,15 @@ import {
   SendWhatsappTextInput,
 } from "./actions.js";
 import { createMacApprover, type Approver } from "./approval.js";
+import { chainTools, loadChains, type ChainBook } from "./chains.js";
 import { loadConfig, type PhoneConfig } from "./config.js";
 import type { ActionOutcome } from "./final.js";
 import { GhosthandClient } from "./ghosthand.js";
 import { NavigationError } from "./navigation.js";
 import { withPhone } from "./phone.js";
 import { STEP_TOOLS } from "./step-tools.js";
-import { defineTool, type PhoneTool } from "./tool.js";
+import { openApp } from "./steps/system.js";
+import { defineStep, defineTool, type PhoneTool } from "./tool.js";
 import { keychainPasscode, type PasscodeSource } from "./unlock.js";
 import { createJevJudge, type Judge } from "./verify.js";
 
@@ -57,21 +58,24 @@ const ACTION_TOOLS: readonly PhoneTool[] = [
     input: BookRapidoInput,
     run: bookRapido,
   }),
-  defineTool({
+  defineStep({
     name: "open_app",
     title: "Open an app, past its Face ID lock",
     description:
       "From any screen: Home Screen, Spotlight, the app's top hit, then its Face ID lock " +
       "(Face ID, then the iPhone passcode from the macOS Keychain, typed at most once).",
     input: OpenAppInput,
-    run: openAppAction,
+    from: "anywhere",
+    to: "<app>.open",
+    step: ({ app }) => openApp(app),
   }),
 ];
 
-/** Whole actions first, then every step they are made of. */
+/** Whole actions first, then every step they are made of, then saved chains of steps. */
 export const PHONE_TOOLS: readonly PhoneTool[] = [
   ...ACTION_TOOLS,
   ...STEP_TOOLS,
+  ...chainTools([...ACTION_TOOLS, ...STEP_TOOLS]),
 ];
 
 export type Runtime = {
@@ -80,6 +84,7 @@ export type Runtime = {
   approve: Approver;
   passcode: PasscodeSource;
   loadConfig: () => Promise<PhoneConfig>;
+  loadChains: () => Promise<ChainBook>;
 };
 
 export function defaultRuntime(): Runtime {
@@ -89,17 +94,25 @@ export function defaultRuntime(): Runtime {
     approve: createMacApprover(),
     passcode: keychainPasscode(),
     loadConfig,
+    loadChains: () => loadChains(),
   };
 }
 
-/** Runs one tool on a leased phone. A navigation failure happens before any final tap: `blocked`. */
+/**
+ * Runs one tool. Input, limits and chains are checked before the phone is leased; a tool
+ * that needs no phone answers then. A navigation failure happens before any final tap: `blocked`.
+ */
 export async function runPhoneTool(
   tool: PhoneTool,
   input: unknown,
   runtime: Runtime,
 ): Promise<ActionOutcome> {
-  const work = tool.prepare(input);
   const config = await runtime.loadConfig();
+  const work = await tool.prepare(input, {
+    config,
+    loadChains: runtime.loadChains,
+  });
+  if (typeof work !== "function") return work;
   try {
     return await withPhone(runtime.ghosthand, `neo ${tool.name}`, (phone) =>
       work({
