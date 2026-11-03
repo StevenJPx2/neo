@@ -6,15 +6,8 @@
     "**neo-phone** drives the iPhone's own apps through **Ghosthand**, exposed as an **MCP server** and a CLI: send a **WhatsApp** message, order drinking water, pay over **UPI in CRED**. Each action is a chain of small hardcoded steps, and each step's start and end screen is read on the device. A step only **pairs** with one that starts where it ends, and the type checker rejects any other pairing.",
     "Sending and paying stop just before the final tap unless asked to finish. Finishing then needs two independent screen checks, **OCR values in code** and a **Jev** vision judgement, plus **Approve in a macOS dialog**. neo never types a UPI PIN, and it types the iPhone passcode at most once, only into the confirmed iOS prompt."
   ],
-  "areas": [
-    "ai-agents",
-    "developer-tools",
-    "mobile-applications"
-  ],
+  "areas": ["ai-agents", "developer-tools", "mobile-applications"],
   "technologies": {
-    "add": [
-      "mcp",
-      "webdriver"
-    ]
+    "add": ["mcp", "webdriver"]
   }
 }
