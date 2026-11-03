@@ -65,7 +65,11 @@ A chain is a named list of steps with variables, saved in
 `~/.config/neo/chains.json` (or `NEO_PHONE_CHAINS`). It runs in one call instead
 of one call per step. The file is installed from the `configs/neo` package of
 the dotfiles repo with `just update neo`. That repo is public, so keep chat
-names, numbers and UPI IDs as variables rather than saved values.
+names, numbers and UPI IDs as variables there.
+
+Personal chains (an address, a payee's UPI ID) go in `chains.local.json` beside
+it, which the dotfiles repo ignores in git but `just update neo` still installs.
+Both files are read together; a chain name may appear in only one of them.
 
 ```json
 {
@@ -97,12 +101,21 @@ npm run phone -- run_chain '{"name":"whatsapp-to-chat","vars":{"chat":"Family","
   `${name}` is replaced inside strings, and a string that is only `${name}` takes
   the value's type, so `"amountInr": "${amount}"` stays a number. Unknown or
   missing variables are refused.
+- **Reading a value:** a reader step such as `whatsapp_read_reply_amount` reads a
+  value off the screen. With `"save": "amount"` it goes into the variable
+  `amount` for the steps after it. Those steps are rebuilt with the value and
+  checked again (the payment limit included). The variable must be declared with
+  an expected value, used to check the chain before it runs. The reader refuses
+  an amount above its `maxInr`, so a reply cannot decide a large payment.
 - **Checked before the phone is leased:** every step's input against that step's
   own schema, every pair of steps (each must start where the one before ends,
-  as `chain().then()` checks at compile time), the payment limit, and that an
-  irreversible step comes only last. A refused chain touches nothing.
-- **`complete` is never saved** in the file. It is given to `run_chain` when the
-  chain runs (default `false`), and finishing still needs Approve on the Mac.
+  as `chain().then()` checks at compile time), and the payment limit. A refused
+  chain touches nothing.
+- **Several irreversible steps** may be in one chain (pay, then send the
+  receipt). `complete` is never saved in the file: it is given to `run_chain`
+  (default `false`, which stops before the first one). With `complete: true`
+  each irreversible step still needs its own Approve on the Mac; a rejection
+  stops the chain there, and the outcome says what already happened.
   `chain <name>` on the CLI always stages.
 - On the device each step still checks its start and end screen, exactly as when
   run one by one.

@@ -38,9 +38,15 @@ server and a CLI. Agents use `neo-phone`, not Ghosthand's own MCP. See
 - Every action starts with `phone.reset` (the base setup), so it works from any
   screen. Every step declares its start and end `Screen`, read from the device
   first; pair steps with `chain(...).then(...)` so mismatches fail to compile.
-- Saved chains (`~/.config/neo/chains.json`, from the dotfiles repo's
+- Saved chains (`~/.config/neo/chains.json`, plus the git-ignored
+  `chains.local.json` for personal values; both from the dotfiles repo's
   `configs/neo`) may only name step tools. `complete` is never saved in them,
-  and they are checked in full before the phone is leased.
+  they are checked in full before the phone is leased, and each irreversible
+  step in them needs its own approval.
+- A value read off the screen (a reader step) that feeds a payment must be capped
+  by the reader and still pass the payment limit.
+- Keep real names, numbers, addresses and UPI IDs out of the repo (tests use
+  made-up ones).
 - An irreversible step (send, pay, book) needs `complete: true`, a passing
   screen check (OCR values in code and Jev), and Approve in the macOS dialog.
   Never bypass, auto-answer, or retry past any of the three.

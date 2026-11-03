@@ -5,12 +5,12 @@ The hardcoded moves neo makes on the iPhone, one module per app. A step is a
 screen shows and must leave its `to` screen showing. Irreversible moves are
 `FinalStep`s from `../final.ts` and only run through `finish()`.
 
-| Module        | Screens it defines                                                                           | Steps                                                                                                          |
-| ------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `system.ts`   | `home`, `spotlight`, `<app>.open`                                                            | `reset` (base setup), `openSpotlight`, `launchFromSpotlight(app)`, `unlock(app, screen)`; chain `openApp(app)` |
-| `whatsapp.ts` | `whatsapp.chat_list`, `.search`, `.chat`, `chatWith(name)`, `draftOf(text)`                  | `showChatList`, `openSearch`, `openChat(name)`, `openChatByNumber(digits)`, `typeDraft(text)`; final `send`    |
-| `cred.ts`     | `cred.home`, `.scanner`, `.pay_search`, `.payee_found`, `.amount`, `.amount_entered`, `.pin` | `showCredHome`, `openScanner`, `openPaySearch`, `findPayee`, `openPayee`, `enterAmount`; final `sendMoney`     |
-| `rapido.ts`   | `rapido.home`, `.vehicles`, `.ready`, `.requested` (experimental labels)                     | `showRapidoHome`, `searchDrop`, `pickVehicle`; final `book`                                                    |
+| Module        | Screens it defines                                                                           | Steps                                                                                                                                            |
+| ------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `system.ts`   | `home`, `spotlight`, `<app>.open`                                                            | `reset` (base setup), `openSpotlight`, `launchFromSpotlight(app)`, `unlock(app, screen)`; chain `openApp(app)`                                   |
+| `whatsapp.ts` | `whatsapp.chat_list`, `.search`, `.chat`, `chatWith(name)`, `draftOf(text)`                  | `showChatList`, `openSearch`, `openChat(name)`, `openChatByNumber(digits)`, `typeDraft(text)`; reader `readReplyAmount(chat, max)`; final `send` |
+| `cred.ts`     | `cred.home`, `.scanner`, `.pay_search`, `.payee_found`, `.amount`, `.amount_entered`, `.pin` | `showCredHome`, `openScanner`, `openPaySearch`, `findPayee`, `openPayee`, `enterAmount`; final `sendMoney`                                       |
+| `rapido.ts`   | `rapido.home`, `.vehicles`, `.ready`, `.requested` (experimental labels)                     | `showRapidoHome`, `searchDrop`, `pickVehicle`; final `book`                                                                                      |
 
 ## Pairing
 
@@ -31,6 +31,8 @@ chain(openSpotlight).then(launchFromSpotlight("cred")).then(showCredHome); // do
 - An app that was just launched is `MaybeLocked<"<app>.open">`. Only `unlock`
   leads on from it, so no chain can skip the Face ID lock.
 - A chain is itself a `Step`, so chains pair with steps and with other chains.
+- A `Reading` is a step plus a `read` that returns a value off the screen once the
+  step has run (`readReplyAmount`). Saved chains can store it in a variable.
 - `runStep` runs the flat list. For each step it checks the start screen, acts,
   then polls for the end screen (bounded, `arrival` overrides the default 12 × 500 ms).
 

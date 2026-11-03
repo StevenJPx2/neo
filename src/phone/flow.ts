@@ -56,6 +56,14 @@ export type Step<From extends string, To extends string> = {
 };
 type AnyStep = Step<string, string>;
 
+export type ReadValue = string | number;
+
+/** A step that, once it has run, reads a value off the screen (e.g. an amount in a reply). */
+export type Reading<From extends string, To extends string> = {
+  step: Step<From, To>;
+  read: (context: StepContext) => Promise<ReadValue>;
+};
+
 /** Steps paired end to start. `then` accepts only a step that starts where the chain ends. */
 export type Chain<From extends string, To extends string> = Step<From, To> & {
   readonly steps: readonly AnyStep[];

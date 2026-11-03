@@ -44,12 +44,19 @@ import {
   openChat,
   openChatByNumber,
   openSearch,
+  readReplyAmount,
   SEARCH,
   send,
   showChatList,
   typeDraft,
 } from "./steps/whatsapp.js";
-import { defineFinal, defineStep, defineTool, type PhoneTool } from "./tool.js";
+import {
+  defineFinal,
+  defineReader,
+  defineStep,
+  defineTool,
+  type PhoneTool,
+} from "./tool.js";
 import { classifyLock } from "./unlock.js";
 
 const NoInput = z.object({});
@@ -186,6 +193,20 @@ const whatsapp: PhoneTool[] = [
     from: "whatsapp.search",
     to: "whatsapp.chat",
     step: ({ number }) => openChatByNumber(normalizePhoneNumber(number)),
+  }),
+  defineReader({
+    name: "whatsapp_read_reply_amount",
+    title: "Read the amount in the latest reply",
+    description:
+      "In the open chat, reads the amount the other person replied with after your last message " +
+      '(e.g. "120"). Refuses an amount above maxInr. In a chain, save it into a variable for the payment.',
+    input: z.object({
+      chat: asciiText("The chat name").max(60),
+      maxInr: z.number().positive().max(5_000),
+    }),
+    from: "whatsapp.chat",
+    to: "whatsapp.chat",
+    reading: ({ chat, maxInr }) => readReplyAmount(chat, maxInr),
   }),
   defineStep({
     name: "whatsapp_type_draft",

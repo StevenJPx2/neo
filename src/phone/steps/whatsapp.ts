@@ -1,9 +1,9 @@
 import type { ScreenLine, ScreenText } from "../ghosthand.js";
 import type { FinalStep } from "../final.js";
-import type { Screen, Step } from "../flow.js";
+import type { Reading, Screen, Step } from "../flow.js";
 import { center, NavigationError, normalize } from "../navigation.js";
 import { isTypeable, type Phone } from "../phone.js";
-import { textExpectation } from "../verify.js";
+import { textExpectation, type Expectation } from "../verify.js";
 import { appOpen } from "./system.js";
 
 // Layout read on iOS 27.2 (iPhone 17, 402x874 pt) with WhatsApp's 2026 design.
@@ -102,6 +102,21 @@ export const CHAT: Screen<"whatsapp.chat"> = {
   shows: inChat,
 };
 
+// WhatsApp cuts a long name in the header: "Green Valley Water...". A cut name must keep this
+// many characters to count as a match.
+const MIN_SHOWN_CHARS = 12;
+const ELLIPSIS = /\s*(\.\.\.|…)$/;
+
+/** Whether header text shows `name`, whole or cut short with an ellipsis. */
+export function showsName(text: string, name: string): boolean {
+  const shown = normalize(text);
+  const full = normalize(name);
+  if (shown === full) return true;
+  if (!ELLIPSIS.test(shown)) return false;
+  const start = shown.replace(ELLIPSIS, "");
+  return start.length >= MIN_SHOWN_CHARS && full.startsWith(start);
+}
+
 /** The chat whose header shows `name` (the header is the only top line right of the arrow). */
 export function chatWith(name: string): Screen<"whatsapp.chat"> {
   return {
@@ -114,8 +129,25 @@ export function chatWith(name: string): Screen<"whatsapp.chat"> {
         (line) =>
           line.y < TOP_BAR_PT &&
           line.x > LEFT_EDGE_PT &&
-          normalize(line.text) === normalize(name),
+          showsName(line.text, name),
       ),
+  };
+}
+
+/** The OCR check for the chat's name before a send; the header may cut it short. */
+function chatNameExpectation(name: string): Expectation {
+  const full = normalize(name);
+  return {
+    label: `the chat "${name}"`,
+    test: (screen) => {
+      if (screen.includes(full)) return true;
+      for (let shown = full.length - 1; shown >= MIN_SHOWN_CHARS; shown -= 1) {
+        const start = full.slice(0, shown).trimEnd();
+        if (screen.includes(`${start}...`) || screen.includes(`${start}…`))
+          return true;
+      }
+      return false;
+    },
   };
 }
 
@@ -261,6 +293,66 @@ export function openChatByNumber(
   };
 }
 
+// The reply is just the amount: "120", sometimes "₹120" or "120/-" (OCR reads ₹ as "F" or "{").
+const REPLY_AMOUNT =
+  /^(?:₹|rs\.?|inr|f|\{)?\s*(\d{1,3}(?:,\d{3})+|\d{1,6})(?:\.\d{1,2})?\s*(?:\/-)?$/i;
+// Their bubbles start at the left edge (seen: x=26); yours start right of this (x≥97). Times in
+// their bubbles ("21:44" at x=67) fall in between and count as neither.
+const INCOMING_MAX_X = 60;
+const OUTGOING_MIN_X = 90;
+
+/** The amount in the latest message from the other person below your own last message, if any. */
+export function latestReplyAmount(screen: ScreenText): number | undefined {
+  const plus = plusButton(screen);
+  const bottom = plus === undefined ? screen.height - BOTTOM_BAR_PT : plus.y;
+  const messages = screen.lines.filter(
+    (line) => line.y > TOP_BAR_PT && line.y < bottom,
+  );
+  const lastOutgoing = Math.max(
+    0,
+    ...messages
+      .filter((line) => line.x >= OUTGOING_MIN_X)
+      .map((line) => line.y),
+  );
+  const amounts = messages
+    .filter((line) => line.x < INCOMING_MAX_X && line.y > lastOutgoing)
+    .sort((a, b) => b.y - a.y)
+    .map((line) => REPLY_AMOUNT.exec(line.text.trim())?.[1]);
+  const latest = amounts.find((amount) => amount !== undefined);
+  return latest === undefined ? undefined : Number(latest.replaceAll(",", ""));
+}
+
+/**
+ * In the open chat `chat`, reads the amount the other person replied with after your last
+ * message. Refuses an amount above `maxInr`: their message must not decide a large payment.
+ */
+export function readReplyAmount(
+  chat: string,
+  maxInr: number,
+): Reading<"whatsapp.chat", "whatsapp.chat"> {
+  const screen = chatWith(chat);
+  return {
+    step: {
+      name: `whatsapp.read_reply_amount(${chat})`,
+      from: screen,
+      to: screen,
+      act: async () => {},
+    },
+    read: async ({ phone }) => {
+      const amount = latestReplyAmount(await phone.readText());
+      if (amount === undefined)
+        throw new NavigationError(
+          `No reply with an amount after your last message in "${chat}".`,
+        );
+      if (amount > maxInr)
+        throw new NavigationError(
+          `The reply in "${chat}" asks for ₹${amount}, above the ₹${maxInr} cap.`,
+        );
+      return amount;
+    },
+  };
+}
+
 /** Clears the message box, then types `text`. Typing only; nothing is sent. */
 export function typeDraft(
   text: string,
@@ -303,7 +395,7 @@ export function send(
   const { text, chatName } = target;
   const opening = openingWords(text);
   const expect = opening === "" ? [] : [textExpectation(opening)];
-  if (chatName !== undefined) expect.push(textExpectation(chatName));
+  if (chatName !== undefined) expect.push(chatNameExpectation(chatName));
   const chat =
     chatName === undefined
       ? "a WhatsApp chat"

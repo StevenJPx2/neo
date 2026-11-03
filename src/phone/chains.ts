@@ -4,8 +4,14 @@ import { join } from "node:path";
 import { z } from "zod";
 import { complete } from "./actions.js";
 import type { PhoneConfig } from "./config.js";
-import { blocked, finish, type ActionOutcome } from "./final.js";
+import {
+  blocked,
+  finish,
+  type ActionDeps,
+  type ActionOutcome,
+} from "./final.js";
 import { runStep } from "./flow.js";
+import { NavigationError } from "./navigation.js";
 import type { Link, PhoneTool, Work } from "./tool.js";
 
 export const DEFAULT_CHAINS_PATH = join(
@@ -19,18 +25,26 @@ export function chainsPath(): string {
   return process.env["NEO_PHONE_CHAINS"] ?? DEFAULT_CHAINS_PATH;
 }
 
+/** Personal chains (addresses, payees) beside the shared file, kept out of git: chains.local.json. */
+export function localChainsPath(path: string = chainsPath()): string {
+  return path.replace(/\.json$/, "") + ".local.json";
+}
+
 const CHAIN_NAME = /^[a-z0-9][a-z0-9_-]{0,40}$/;
 const VAR_NAME = /^[a-zA-Z_][a-zA-Z0-9_]{0,30}$/;
 const MAX_CHAIN_STEPS = 30;
 
 const VarValue = z.union([z.string().max(1_000), z.number(), z.boolean()]);
 export type VarValue = z.infer<typeof VarValue>;
+type Vars = Record<string, VarValue>;
 
 const StepRef = z.union([
   z.string().min(1),
   z.strictObject({
     tool: z.string().min(1),
     input: z.record(z.string(), z.unknown()).default({}),
+    /** Reader steps only: the variable that takes the value read, for the steps after it. */
+    save: z.string().regex(VAR_NAME).optional(),
   }),
 ]);
 const SavedChainSchema = z.strictObject({
@@ -51,10 +65,23 @@ export class ChainError extends Error {
   override readonly name = "ChainError";
 }
 
-/** Reads the chain file; a missing file means no chains. */
+/** Reads the shared chain file and the personal one beside it; missing files mean no chains. */
 export async function loadChains(
   path: string = chainsPath(),
 ): Promise<ChainBook> {
+  const shared = await readBook(path);
+  const local = await readBook(localChainsPath(path));
+  const both = Object.keys(shared.chains).filter(
+    (name) => name in local.chains,
+  );
+  if (both.length > 0)
+    throw new ChainError(
+      `Chains defined in both ${path} and ${localChainsPath(path)}: ${both.join(", ")}.`,
+    );
+  return { chains: { ...shared.chains, ...local.chains } };
+}
+
+async function readBook(path: string): Promise<ChainBook> {
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
@@ -82,16 +109,13 @@ export function parseChains(raw: string, source = "chain file"): ChainBook {
 }
 
 /** Saved defaults overridden by `given`; every variable needs a value, and no others are allowed. */
-function resolveVars(
-  chain: SavedChain,
-  given: Record<string, VarValue>,
-): Record<string, VarValue> {
+function resolveVars(chain: SavedChain, given: Vars): Vars {
   const unknown = Object.keys(given).filter((name) => !(name in chain.vars));
   if (unknown.length > 0)
     throw new ChainError(
       `Unknown variable ${unknown.join(", ")}; this chain has: ${Object.keys(chain.vars).join(", ") || "none"}.`,
     );
-  const vars: Record<string, VarValue> = {};
+  const vars: Vars = {};
   for (const [name, saved] of Object.entries(chain.vars)) {
     const value = given[name] ?? saved;
     if (value === null)
@@ -105,7 +129,7 @@ const WHOLE_VAR = /^\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}$/;
 const ANY_VAR = /\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
 
 /** Replaces `${name}` in strings. A string that is only `${name}` takes the value's type (e.g. a number). */
-function substitute(value: unknown, vars: Record<string, VarValue>): unknown {
+function substitute(value: unknown, vars: Vars): unknown {
   const lookup = (name: string): VarValue => {
     const found = vars[name];
     if (found === undefined)
@@ -127,6 +151,16 @@ function substitute(value: unknown, vars: Record<string, VarValue>): unknown {
   return value;
 }
 
+/** A checked chain, ready to run. `relink` rebuilds its steps after a reader saves a value. */
+export type ChainPlan = {
+  name: string;
+  links: Link[];
+  vars: Vars;
+  /** Per step: the variable a reader step saves into. */
+  saves: (string | undefined)[];
+  relink: (vars: Vars) => Link[];
+};
+
 /**
  * Builds every step of the saved chain `name` and checks that each starts where the one
  * before it ends: the runtime form of `chain(...).then(...)`'s compile-time check.
@@ -134,10 +168,10 @@ function substitute(value: unknown, vars: Record<string, VarValue>): unknown {
 export function planChain(
   book: ChainBook,
   name: string,
-  given: Record<string, VarValue>,
+  given: Vars,
   config: PhoneConfig,
   tools: readonly PhoneTool[],
-): Link[] {
+): ChainPlan {
   const chain = book.chains[name];
   if (chain === undefined) {
     const names = Object.keys(book.chains).join(", ") || "none";
@@ -146,17 +180,23 @@ export function planChain(
     );
   }
   const vars = resolveVars(chain, given);
-  const links = chain.steps.map((ref, index) =>
-    linkStep(ref, index + 1, vars, config, tools),
+  const relink = (current: Vars) =>
+    chain.steps.map((ref, index) =>
+      linkStep(ref, index + 1, current, config, tools),
+    );
+  const links = relink(vars);
+  const saves = chain.steps.map((ref) =>
+    typeof ref === "string" ? undefined : ref.save,
   );
+  checkSaves(links, saves, chain);
   checkPairs(links);
-  return links;
+  return { name, links, vars, saves, relink };
 }
 
 function linkStep(
   ref: SavedChain["steps"][number],
   position: number,
-  vars: Record<string, VarValue>,
+  vars: Vars,
   config: PhoneConfig,
   tools: readonly PhoneTool[],
 ): Link {
@@ -185,17 +225,33 @@ function linkStep(
   }
 }
 
+/** Only reader steps save, into a declared variable whose saved value stands in until the read. */
+function checkSaves(
+  links: readonly Link[],
+  saves: readonly (string | undefined)[],
+  chain: SavedChain,
+): void {
+  saves.forEach((save, index) => {
+    const link = links[index];
+    if (save === undefined || link === undefined) return;
+    if (link.kind !== "read")
+      throw new ChainError(
+        `Step ${index + 1} (${link.tool}) reads nothing, so it cannot "save".`,
+      );
+    if (chain.vars[save] === undefined || chain.vars[save] === null)
+      throw new ChainError(
+        `Step ${index + 1} saves into "${save}": declare it in "vars" with an expected value, used to check the chain before it runs.`,
+      );
+  });
+}
+
 const endOf = (link: Link) =>
-  link.kind === "step" ? link.step.to.name : link.final.to.name;
+  link.kind === "final" ? link.final.to.name : link.step.to.name;
 const startOf = (link: Link) =>
-  link.kind === "step" ? link.step.from.name : link.final.from.name;
+  link.kind === "final" ? link.final.from.name : link.step.from.name;
 
 function checkPairs(links: readonly Link[]): void {
   links.forEach((link, index) => {
-    if (link.kind === "final" && index !== links.length - 1)
-      throw new ChainError(
-        `Step ${index + 1} (${link.tool}) is irreversible, so it must be the last step.`,
-      );
     const before = links[index - 1];
     if (before === undefined || startOf(link) === "anywhere") return;
     if (startOf(link) !== endOf(before))
@@ -207,24 +263,85 @@ function checkPairs(links: readonly Link[]): void {
 
 /** The chain's work on a leased phone, or a refusal (e.g. an amount over the limit) before it. */
 export function chainWork(
-  name: string,
-  links: readonly Link[],
-  completeFinal: boolean,
+  plan: ChainPlan,
+  completeFinals: boolean,
 ): Work | ActionOutcome {
-  const refused = links.find((link) => link.refusal !== undefined);
+  const refused = plan.links.find((link) => link.refusal !== undefined);
   if (refused !== undefined)
-    return blocked(`Chain "${name}"`, `${refused.tool}: ${refused.refusal}`);
+    return blocked(
+      `Chain "${plan.name}"`,
+      `${refused.tool}: ${refused.refusal}`,
+    );
   return async (deps) => {
-    for (const link of links) {
-      if (link.kind === "final") return finish(deps, link.final, completeFinal);
-      await runStep(deps, link.step);
+    const progress = new Progress(plan.name);
+    try {
+      return await runLinks(deps, plan, completeFinals, progress);
+    } catch (error) {
+      if (!(error instanceof NavigationError || error instanceof ChainError))
+        throw error;
+      return progress.stopped(error.message);
     }
-    const last = links.at(-1);
-    const end = last === undefined ? "the same screen" : endOf(last);
+  };
+}
+
+/** What a running chain has done, for its outcome: values read and irreversible steps made. */
+class Progress {
+  readonly done: string[] = [];
+  constructor(private readonly name: string) {}
+
+  /** An outcome that stopped the chain, saying what already happened before it. */
+  with(outcome: ActionOutcome): ActionOutcome {
+    if (this.done.length === 0) return outcome;
     return {
-      status: "completed",
-      summary: `Ran chain "${name}" (${links.length} steps). Now on ${end}.`,
+      ...outcome,
+      summary: `${outcome.summary} (chain "${this.name}", after: ${this.done.join("; ")})`,
     };
+  }
+
+  stopped(reason: string): ActionOutcome {
+    const done =
+      this.done.length === 0
+        ? "No irreversible step was made."
+        : `Done before this: ${this.done.join("; ")}.`;
+    return blocked(`Chain "${this.name}"`, `${reason} ${done}`);
+  }
+}
+
+async function runLinks(
+  deps: ActionDeps,
+  plan: ChainPlan,
+  completeFinals: boolean,
+  progress: Progress,
+): Promise<ActionOutcome> {
+  let links = plan.links;
+  let vars = plan.vars;
+  for (let index = 0; index < links.length; index += 1) {
+    const link = links[index];
+    if (link === undefined) break;
+    if (link.refusal !== undefined)
+      return progress.stopped(`${link.tool}: ${link.refusal}`);
+    if (link.kind === "final") {
+      const outcome = await finish(deps, link.final, completeFinals);
+      if (outcome.status !== "completed") return progress.with(outcome);
+      progress.done.push(outcome.summary);
+      continue;
+    }
+    await runStep(deps, link.step);
+    if (link.kind !== "read") continue;
+    const save = plan.saves[index];
+    const value = await link.read(deps);
+    progress.done.push(
+      `read ${String(value)}${save === undefined ? "" : ` into ${save}`}`,
+    );
+    if (save === undefined) continue;
+    vars = { ...vars, [save]: value };
+    links = plan.relink(vars);
+  }
+  const end = links.at(-1);
+  return {
+    status: "completed",
+    summary:
+      `Ran chain "${plan.name}" (${links.length} steps). Now on ${end === undefined ? "the same screen" : endOf(end)}. ${progress.done.join("; ")}`.trim(),
   };
 }
 
@@ -243,22 +360,22 @@ export function chainTools(steps: readonly PhoneTool[]): PhoneTool[] {
     name: "run_chain",
     title: "Run a saved chain of steps",
     description:
-      "Runs a chain of steps saved in ~/.config/neo/chains.json (NEO_PHONE_CHAINS), with its variables " +
-      "filled in. Every step's start and end screen is checked on the device, as when run one by one. " +
-      "If the chain ends in an irreversible step, complete=false (default) stops before its tap; " +
-      "complete=true asks for approval on the Mac first. See list_chains.",
+      "Runs a chain of steps saved in ~/.config/neo/chains.json or chains.local.json (NEO_PHONE_CHAINS), " +
+      "with its variables filled in. Every step's start and end screen is checked on the device, as when run one by one. " +
+      "complete=false (default) stops before the chain's first irreversible step; complete=true asks for approval " +
+      "on the Mac before each irreversible step. See list_chains.",
     shape: RunChainInput.shape,
     prepare: async (input, { config, loadChains }) => {
       const parsed = RunChainInput.parse(input);
       try {
-        const links = planChain(
+        const plan = planChain(
           await loadChains(),
           parsed.name,
           parsed.vars,
           config,
           steps,
         );
-        return chainWork(parsed.name, links, parsed.complete);
+        return chainWork(plan, parsed.complete);
       } catch (error) {
         if (!(error instanceof ChainError)) throw error;
         return blocked(
@@ -272,7 +389,7 @@ export function chainTools(steps: readonly PhoneTool[]): PhoneTool[] {
     name: "list_chains",
     title: "List the saved chains",
     description:
-      "Lists the chains in ~/.config/neo/chains.json: their variables, saved values and steps. Does not use the phone.",
+      "Lists the chains in ~/.config/neo/chains.json and chains.local.json: their variables, saved values and steps. Does not use the phone.",
     shape: z.object({}).shape,
     prepare: async (_input, { loadChains }) => {
       try {
@@ -299,7 +416,11 @@ function describeChains(book: ChainBook): string {
       )
       .join(", ");
     const steps = chain.steps.map((ref) =>
-      typeof ref === "string" ? ref : ref.tool,
+      typeof ref === "string"
+        ? ref
+        : ref.save === undefined
+          ? ref.tool
+          : `${ref.tool}→${ref.save}`,
     );
     const about =
       chain.description === undefined ? "" : ` ${chain.description}`;

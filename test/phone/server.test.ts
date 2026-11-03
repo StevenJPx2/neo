@@ -51,6 +51,7 @@ describe("neo-phone MCP server", { timeout: 30_000 }, () => {
       "whatsapp_open_search",
       "whatsapp_open_chat",
       "whatsapp_open_chat_by_number",
+      "whatsapp_read_reply_amount",
       "whatsapp_type_draft",
       "whatsapp_send",
       "cred_home",

@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { mkdir, writeFile } from "node:fs/promises";
+import type { ApprovalDecision } from "../../src/phone/approval.js";
 import {
   chainWork,
   loadChains,
@@ -9,8 +11,18 @@ import {
   planChain,
   type VarValue,
 } from "../../src/phone/chains.js";
+import {
+  latestReplyAmount,
+  showsName,
+} from "../../src/phone/steps/whatsapp.js";
 import { PHONE_TOOLS } from "../../src/phone/tools.js";
 import { config, cred, deps, MESSAGE, PAYEE, whatsapp } from "./fake-apps.js";
+import {
+  FakePhone,
+  screensWith,
+  systemTransition,
+  type FakeLine,
+} from "./fake-phone.js";
 
 const book = parseChains(
   JSON.stringify({
@@ -70,11 +82,7 @@ describe("running a saved chain", () => {
   it("runs every step with its variables, and stops before the final tap", async () => {
     const fake = whatsapp("Family", "Family");
     const context = deps(fake);
-    const work = chainWork(
-      "note-to",
-      plan("note-to", { text: MESSAGE }),
-      false,
-    );
+    const work = chainWork(plan("note-to", { text: MESSAGE }), false);
     if (typeof work !== "function") throw new Error("expected work");
 
     expect(await work(context)).toMatchObject({
@@ -89,7 +97,7 @@ describe("running a saved chain", () => {
   it("asks for approval before the final tap when run with complete", async () => {
     const fake = whatsapp("Family", "Family");
     const context = deps(fake);
-    const work = chainWork("note-to", plan("note-to", { text: MESSAGE }), true);
+    const work = chainWork(plan("note-to", { text: MESSAGE }), true);
     if (typeof work !== "function") throw new Error("expected work");
 
     expect((await work(context)).status).toBe("completed");
@@ -99,11 +107,7 @@ describe("running a saved chain", () => {
 
   it("overrides a saved value, keeps numbers numbers, and ends without a final step", async () => {
     const fake = cred("F120", "120");
-    const work = chainWork(
-      "pay-shop",
-      plan("pay-shop", { amount: 120 }),
-      false,
-    );
+    const work = chainWork(plan("pay-shop", { amount: 120 }), false);
     if (typeof work !== "function") throw new Error("expected work");
 
     expect(await work(deps(fake))).toMatchObject({
@@ -114,9 +118,7 @@ describe("running a saved chain", () => {
   });
 
   it("refuses an amount over the limit before the phone is leased", () => {
-    expect(
-      chainWork("pay-shop", plan("pay-shop", { amount: 5000 }), false),
-    ).toMatchObject({
+    expect(chainWork(plan("pay-shop", { amount: 5000 }), false)).toMatchObject({
       status: "blocked",
       reason: expect.stringMatching(/cred_enter_amount: .*limit/),
     });
@@ -136,16 +138,24 @@ describe("checking a chain before it runs", () => {
   });
 
   it("lets a step that starts anywhere follow any step", () => {
-    expect(planSteps(["whatsapp_chat_list", "phone_reset"])).toHaveLength(2);
+    expect(planSteps(["whatsapp_chat_list", "phone_reset"]).links).toHaveLength(
+      2,
+    );
   });
 
-  it("allows an irreversible step only at the end", () => {
+  it("lets a reader save only into a declared variable, and only a reader save", () => {
+    expect(() =>
+      planSteps([{ tool: "whatsapp_chat_list", save: "x" }], { x: 1 }),
+    ).toThrow(/reads nothing, so it cannot "save"/);
     expect(() =>
       planSteps([
-        { tool: "whatsapp_send", input: { text: "hi" } },
-        "phone_reset",
+        {
+          tool: "whatsapp_read_reply_amount",
+          input: { chat: TOP, maxInr: 200 },
+          save: "amount",
+        },
       ]),
-    ).toThrow(/irreversible, so it must be the last step/);
+    ).toThrow(/declare it in "vars" with an expected value/);
   });
 
   it("needs every variable, and no others", () => {
@@ -229,5 +239,174 @@ describe("run_chain and list_chains", () => {
         'note-to(chat="Family", text (required)): Draft a message in a chat, ready to send [open_app → whatsapp_chat_list',
       ),
     });
+  });
+});
+
+// ---------------------------------------------------------------- Reading the reply (as on the device)
+
+const TOP = "Green Valley Water Supply";
+const REPLY: FakeLine[] = [
+  ["120", 26, 370],
+  ["21:44", 67, 381],
+];
+/** The chat as read on the iPhone: the header cuts the name short; your order on the right. */
+const topChat = (...extra: FakeLine[]): FakeLine[] => [
+  ["09:41", 37, 25],
+  ["<3", 20, 68],
+  ["Green Valley Water...", 115, 71],
+  ["online", 115, 87],
+  ["One 20 L water can please.", 108, 294],
+  ["Flat 4B, KR Garden", 108, 317],
+  ["21:43", 321, 330],
+  ...extra,
+  ["+", 5, 798, 38],
+];
+const draft = (text: string): FakeLine => [text, 57, 809, 20];
+const sent = (text: string, y: number): FakeLine => [text, 150, y];
+
+function topPhone(reply: FakeLine[] = REPLY): FakePhone {
+  const moves: Record<string, Record<string, string>> = {
+    chat: { "type:Paid 120": "draftA" },
+    draftA: { "key:enter": "sentA" },
+    sentA: { "type:Thanks": "draftB" },
+    draftB: { "key:enter": "sentB" },
+  };
+  return new FakePhone(
+    "chat",
+    screensWith({
+      chat: topChat(...reply),
+      draftA: topChat(...reply, draft("Paid 120")),
+      sentA: topChat(...reply, sent("Paid 120", 600)),
+      draftB: topChat(...reply, sent("Paid 120", 600), draft("Thanks")),
+      sentB: topChat(...reply, sent("Paid 120", 600), sent("Thanks", 650)),
+    }),
+    (state, input) => moves[state]?.[input] ?? systemTransition(state, input),
+  );
+}
+
+const readThenSend = (steps: unknown[] = []) =>
+  parseChains(
+    JSON.stringify({
+      chains: {
+        settle: {
+          vars: { amount: 999 },
+          steps: [
+            {
+              tool: "whatsapp_read_reply_amount",
+              input: { chat: TOP, maxInr: 200 },
+              save: "amount",
+            },
+            { tool: "whatsapp_type_draft", input: { text: "Paid ${amount}" } },
+            { tool: "whatsapp_send", input: { text: "Paid ${amount}" } },
+            ...steps,
+          ],
+        },
+      },
+    }),
+  );
+
+describe("reading a value and using it later in the chain", () => {
+  it("knows a cut-short header, and finds their latest amount below your last message", async () => {
+    expect(showsName("Green Valley Water...", TOP)).toBe(true);
+    expect(showsName("Green...", TOP)).toBe(false);
+    expect(latestReplyAmount(await topPhone().readText())).toBe(120);
+    expect(latestReplyAmount(await topPhone([]).readText())).toBeUndefined();
+  });
+
+  it("saves the amount it read and rebuilds the later steps with it", async () => {
+    const fake = topPhone();
+    const plan = planChain(readThenSend(), "settle", {}, config, PHONE_TOOLS);
+    const work = chainWork(plan, false);
+    if (typeof work !== "function") throw new Error("expected work");
+
+    expect(await work(deps(fake))).toMatchObject({
+      status: "staged",
+      summary: expect.stringMatching(/"Paid 120".*after: read 120 into amount/),
+    });
+    expect(fake.inputs).toContain("type:Paid 120");
+  });
+
+  it("stops above the cap, and when there is no reply, before typing anything", async () => {
+    for (const reply of [[["500", 26, 370] as FakeLine], []]) {
+      const fake = topPhone(reply);
+      const work = chainWork(
+        planChain(readThenSend(), "settle", {}, config, PHONE_TOOLS),
+        true,
+      );
+      if (typeof work !== "function") throw new Error("expected work");
+
+      expect(await work(deps(fake))).toMatchObject({
+        status: "blocked",
+        reason: expect.stringMatching(
+          /above the ₹200 cap|No reply with an amount/,
+        ),
+      });
+      expect(fake.inputs.filter((input) => input.startsWith("type:"))).toEqual(
+        [],
+      );
+    }
+  });
+
+  it("asks for approval before each irreversible step, and reports what happened before a stop", async () => {
+    const twoSends = readThenSend([
+      { tool: "whatsapp_type_draft", input: { text: "Thanks" } },
+      { tool: "whatsapp_send", input: { text: "Thanks" } },
+    ]);
+    const fake = topPhone();
+    const context = deps(fake);
+    const work = chainWork(
+      planChain(twoSends, "settle", {}, config, PHONE_TOOLS),
+      true,
+    );
+    if (typeof work !== "function") throw new Error("expected work");
+
+    expect((await work(context)).status).toBe("completed");
+    expect(context.asked).toHaveLength(2);
+    expect(fake.inputs.filter((input) => input === "key:enter")).toHaveLength(
+      2,
+    );
+
+    const declining = topPhone();
+    let approvals = 0;
+    const second = {
+      ...deps(declining),
+      // Approve the first send, reject the second.
+      approve: async (): Promise<ApprovalDecision> =>
+        approvals++ === 0 ? "approved" : "rejected",
+    };
+    const again = chainWork(
+      planChain(twoSends, "settle", {}, config, PHONE_TOOLS),
+      true,
+    );
+    if (typeof again !== "function") throw new Error("expected work");
+    expect(await again(second)).toMatchObject({
+      status: "declined",
+      summary: expect.stringMatching(
+        /after: read 120 into amount; Send WhatsApp/,
+      ),
+    });
+  });
+});
+
+describe("the personal chain file", () => {
+  it("merges chains.local.json, and refuses a name in both", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "neo-chains-"));
+    try {
+      await mkdir(dir, { recursive: true });
+      const one = (name: string) =>
+        JSON.stringify({ chains: { [name]: { steps: ["phone_reset"] } } });
+      await writeFile(join(dir, "chains.json"), one("shared"));
+      await writeFile(join(dir, "chains.local.json"), one("mine"));
+      expect(
+        Object.keys((await loadChains(join(dir, "chains.json"))).chains),
+      ).toEqual(["shared", "mine"]);
+
+      await writeFile(join(dir, "chains.local.json"), one("shared"));
+      await expect(loadChains(join(dir, "chains.json"))).rejects.toThrow(
+        /defined in both/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
