@@ -2,14 +2,18 @@
   "body": [
     "A small **TypeScript** harness for **Safari on a real iPhone**, over USB or Wi-Fi, or on an iOS Simulator. Agents get an API to navigate, click, type, take screenshots, read the DOM and manage tabs.",
     "It talks to Apple's **W3C WebDriver** server, `safaridriver`, directly, so there is **no Appium and no native app**.",
-    "Safari automation is isolated from ordinary browsing data and allows **one session at a time**, and neo keeps both constraints."
+    "Safari automation is isolated from ordinary browsing data and allows **one session at a time**, and neo keeps both constraints.",
+    "**neo-phone** drives the iPhone's own apps through **Ghosthand**, exposed as an **MCP server** and a CLI: send a **WhatsApp** message, order drinking water, pay over **UPI in CRED**. Each action is a chain of small hardcoded steps, and each step's start and end screen is read on the device. A step only **pairs** with one that starts where it ends, and the type checker rejects any other pairing.",
+    "Sending and paying stop just before the final tap unless asked to finish. Finishing then needs two independent screen checks, **OCR values in code** and a **Jev** vision judgement, plus **Approve in a macOS dialog**. neo never types a UPI PIN, and it types the iPhone passcode at most once, only into the confirmed iOS prompt."
   ],
   "areas": [
+    "ai-agents",
     "developer-tools",
     "mobile-applications"
   ],
   "technologies": {
     "add": [
+      "mcp",
       "webdriver"
     ]
   }
